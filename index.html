@@ -1,0 +1,457 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Ids Auto-Replacer</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<style>
+:root{
+--bg:#0f1724; --card:#0b1220; --muted:#9aa4b2; --accent:#60a5fa;
+--success:#10b981; --danger:#ef4444; --glass: rgba(255,255,255,0.03);
+font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial;
+}
+html,body{height:100%;margin:0;background:linear-gradient(180deg,#071127 0%, #081225 100%);color:#e6eef7}
+.container{max-width:980px;margin:36px auto;padding:28px;background:linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01));border-radius:12px;box-shadow:0 6px 30px rgba(2,6,23,0.7)}
+h1{margin:0 0 6px;font-size:20px}
+p.lead{margin:0 0 18px;color:var(--muted);font-size:13px}
+.grid{display:grid;grid-template-columns: 1fr 380px;gap:20px}
+.panel{background:var(--card);padding:14px;border-radius:10px;border:1px solid rgba(255,255,255,0.02)}
+label{display:block;font-size:12px;margin-bottom:6px;color:var(--muted)}
+input[type=file]{display:block}
+textarea{width:100%;min-height:220px;padding:10px;border-radius:8px;border:1px solid rgba(255,255,255,0.03); box-sizing: border-box; background:var(--glass);color:inherit;font-family:monospace;font-size:13px;resize:vertical}
+.btn{display:inline-block;padding:10px 14px;border-radius:8px;border:none;background:var(--muted);color:#0b1220;font-weight:600;cursor:pointer}
+.btn.secondary{background:transparent;border:1px solid rgba(255,255,255,0.04);color:var(--muted); border: 1px solid #ffffff;}
+.space{height:12px}
+.outputs{display:flex;flex-direction:column;gap:8px}
+.outputRow{display:flex;gap:8px;align-items:center}
+.chip{padding:8px 10px;border-radius:8px;background:rgba(255,255,255,0.02);font-size:13px;color:var(--muted);border:1px solid rgba(255,255,255,0.02)}
+.msg{font-size:13px;padding:10px;border-radius:8px}
+.msg.info{background:rgba(96,165,250,0.08);border:1px solid rgba(96,165,250,0.08);color:var(--accent)}
+.msg.success{background:rgba(16,185,129,0.06);border:1px solid rgba(16,185,129,0.06);color:var(--success)}
+.msg.error{background:rgba(239,68,68,0.06);border:1px solid rgba(239,68,68,0.06);color:var(--danger)}
+footer{margin-top:18px;color:var(--muted);font-size:12px;text-align:center}
+.small{font-size:12px;color:var(--muted)}
+a.downloadLink{color:var(--accent);text-decoration:none;font-weight:600; padding: 8px 10px; background-color: var(--muted); color:var(--bg); border-radius: 6px;}
+.fileList{max-height:220px;overflow:auto;padding:6px;border-radius:8px;border:1px dashed rgba(255,255,255,0.02)}
+.rowInline{display:flex;gap:8px;align-items:center}
+@media (max-width:900px){ .grid{grid-template-columns:1fr; } }
+</style>
+</head>
+<body>
+<div class="container" role="main">
+<h1>Ids Auto-Replacer</h1>
+<p class="lead">Upload single HTML or ZIP File(s).</p>
+
+<div class="grid">
+<div class="panel">
+<label for="fileInput">1) Upload file (HTML or ZIP)</label>
+<input id="fileInput" type="file" accept=".html,.htm,application/zip" />
+
+<div class="space"></div>
+
+<label for="mappings">2) Old IDs & New IDs</label>
+<textarea id="mappings" placeholder="OldID    NewID
+
+123456    654321
+234567    765432"></textarea>
+
+<div class="space"></div>
+<div class="rowInline">
+<input type="checkbox" id="safeRename" />
+<label for="safeRename" class="small" title="Rename HTML to .html.txt to avoid Windows blocking">Safe-distribute: rename .html → .html.txt (recommended)</label>
+</div>
+<div style="margin-top:8px" class="small">When enabled, ZIP will contain `.html.txt` files. After extraction, rename back to `.html` to open. README will be included.</div>
+
+<div class="space"></div>
+<div style="display:flex;gap:8px;align-items:center">
+<button id="processBtn" class="btn">Process Files</button>
+<button id="clearBtn" class="btn secondary" title="Clear mapping & file">Clear</button>
+<div style="flex:1"></div>
+</div>
+
+<div class="space"></div>
+
+<div id="statusArea" aria-live="polite"></div>
+</div>
+
+<div class="panel">
+<h3 style="margin:0 0 8px">Output</h3>
+<div id="outputSection" class="outputs">
+<div id="emptyNote" class="chip">No processed outputs yet.</div>
+</div>
+
+<div class="space"></div>
+
+<div class="small">Notes:
+<ul style="margin:6px 0 0 18px">
+<li>Only modifies the numeric value after <code>ccID=</code> using a strict regex — nothing else will be changed.</li>
+<li>Because processing is text-based, URL query separators like <code>&</code> will not be escaped.</li>
+</ul>
+</div>
+</div>
+</div>
+
+<footer>No data leaves your browser.
+  <br>
+  <p>Developed by <a href="https://www.linkedin.com/in/pranay-kumar-sivvam-164539191/" target="_blank" style="color: var(--accent); text-decoration: none;">Pranay Kumar Sivvam</a></p>
+</footer>
+</div>
+
+<script>
+(function(){
+const fileInput = document.getElementById('fileInput');
+const mappingsTextarea = document.getElementById('mappings');
+const processBtn = document.getElementById('processBtn');
+const clearBtn = document.getElementById('clearBtn');
+const statusArea = document.getElementById('statusArea');
+const outputSection = document.getElementById('outputSection');
+const safeRenameCheckbox = document.getElementById('safeRename');
+
+function showStatus(message, type='info') {
+statusArea.innerHTML = '<div class="msg ' + type + '">' + escapeHtml(message) + '</div>';
+}
+
+function appendOutputNode(node) {
+const en = document.getElementById('emptyNote');
+if (en) en.remove();
+outputSection.appendChild(node);
+}
+
+function clearOutputs() {
+outputSection.innerHTML = '<div id="emptyNote" class="chip">No processed outputs yet.</div>';
+}
+
+function escapeHtml(s){
+return String(s)
+.replace(/&/g,'&amp;')
+.replace(/</g,'&lt;')
+.replace(/>/g,'&gt;');
+}
+
+function parseMappings(text) {
+const lines = text.split(/\r?\n/);
+const map = new Map();
+
+for (const line of lines) {
+const trimmed = line.trim();
+
+if (!trimmed) continue;
+
+const parts = trimmed.split(/\s+/);
+
+if (parts.length >= 2) {
+const oldId = parts[0].trim();
+const newId = parts[1].trim();
+
+if (oldId && newId) {
+map.set(oldId, newId);
+}
+}
+}
+
+return map;
+}
+
+function processHtmlString_textOnly(rawHtml, mapping) {
+const ccidRegex = /(ccID=)(\d+)/g;
+
+return rawHtml.replace(ccidRegex, (match, prefix, idValue) => {
+if (mapping.has(idValue)) {
+return prefix + mapping.get(idValue);
+}
+return match;
+});
+}
+
+async function sha256Hex(str) {
+const enc = new TextEncoder();
+const data = enc.encode(str);
+const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+const hashArray = Array.from(new Uint8Array(hashBuffer));
+
+return hashArray
+.map(b => b.toString(16).padStart(2,'0'))
+.join('');
+}
+
+processBtn.addEventListener('click', async function(){
+
+statusArea.innerHTML = '';
+clearOutputs();
+
+const file = fileInput.files && fileInput.files[0];
+
+if (!file) {
+showStatus('Please choose an HTML file or a ZIP file to process.', 'error');
+return;
+}
+
+const mappingText = mappingsTextarea.value || '';
+
+if (!mappingText.trim()) {
+showStatus('Please paste Old IDs and New IDs.', 'error');
+return;
+}
+
+const mapping = parseMappings(mappingText);
+
+if (mapping.size === 0) {
+showStatus('Parsed 0 mapping pairs. Check formatting.', 'error');
+return;
+}
+
+const safeRename = !!safeRenameCheckbox.checked;
+
+showStatus('Parsed ' + mapping.size + ' mapping(s). Processing...', 'info');
+
+const nameLower = file.name.toLowerCase();
+
+try {
+
+if (nameLower.endsWith('.zip')) {
+
+const arrayBuffer = await file.arrayBuffer();
+const zip = await JSZip.loadAsync(arrayBuffer);
+
+const outZip = new JSZip();
+
+const processedFiles = [];
+const checksums = [];
+
+const entries = Object.keys(zip.files);
+
+for (const entryName of entries) {
+
+const entry = zip.files[entryName];
+
+if (!entry.dir && /\.html?$/i.test(entry.name)) {
+
+const raw = await entry.async('text');
+
+const processed = processHtmlString_textOnly(raw, mapping);
+
+const digest = await sha256Hex(processed);
+
+checksums.push({
+name: entry.name,
+sha256: digest
+});
+
+const outName = safeRename
+? entry.name.replace(/(\.html?)$/i, '$1.txt')
+: entry.name;
+
+outZip.file(outName, processed);
+
+processedFiles.push(outName);
+
+} else if (entry.dir) {
+
+outZip.folder(entry.name);
+
+} else {
+
+const content = await entry.async('uint8array');
+
+outZip.file(entry.name, content);
+}
+}
+
+if (processedFiles.length === 0) {
+showStatus('No HTML files found inside the ZIP. Nothing processed.', 'error');
+return;
+}
+
+const readmeLines = [];
+
+readmeLines.push('README - ccID Auto-Replacer');
+readmeLines.push('');
+
+if (safeRename) {
+readmeLines.push('Files were renamed to *.html.txt.');
+readmeLines.push('Rename them back to *.html after extraction.');
+readmeLines.push('');
+}
+
+readmeLines.push('SHA-256 checksums:');
+
+checksums.forEach(c => {
+readmeLines.push(c.sha256 + '  ' + c.name);
+});
+
+const readmeStr = readmeLines.join('\n');
+
+outZip.file('README.txt', readmeStr);
+
+const outBlob = await outZip.generateAsync({type:'blob'});
+
+const url = URL.createObjectURL(outBlob);
+
+const outName = file.name.replace(/\.zip$/i, '-modified.zip');
+
+const node = document.createElement('div');
+
+node.className = 'outputRow';
+
+node.innerHTML =
+'<div class="chip">Modified ZIP (' +
+escapeHtml(file.name) +
+')</div> <a class="downloadLink" href="' +
+url +
+'" download="' +
+outName +
+'">Download ZIP</a>';
+
+appendOutputNode(node);
+
+showStatus('Done. Download the ZIP.', 'success');
+
+} else if (/\.html?$/i.test(nameLower)) {
+
+const raw = await file.text();
+
+const processed = processHtmlString_textOnly(raw, mapping);
+
+const blob = new Blob([processed], {
+type: 'text/html;charset=utf-8'
+});
+
+const url = URL.createObjectURL(blob);
+
+const outName = file.name.replace(/(\.html?)$/i, '-modified$1');
+
+const node = document.createElement('div');
+
+node.className = 'outputRow';
+
+node.innerHTML =
+'<div class="chip">Modified HTML</div> <a class="downloadLink" href="' +
+url +
+'" download="' +
+outName +
+'">Download HTML</a>';
+
+appendOutputNode(node);
+
+if (safeRename) {
+
+const z = new JSZip();
+
+const fname = file.name.replace(/(\.html?)$/i, '$1.txt');
+
+z.file(fname, processed);
+
+const digest = await sha256Hex(processed);
+
+const readme = [
+'README - ccID Auto-Replacer',
+'',
+'Rename ' + fname + ' back to HTML after extraction.',
+'',
+'SHA-256: ' + digest
+].join('\n');
+
+z.file('README.txt', readme);
+
+const zipBlob = await z.generateAsync({type:'blob'});
+
+const zipUrl = URL.createObjectURL(zipBlob);
+
+const zipName = file.name.replace(/(\.html?)$/i, '-modified.zip');
+
+const zipNode = document.createElement('div');
+
+zipNode.className = 'outputRow';
+
+zipNode.innerHTML =
+'<div class="chip">Modified ZIP (safe)</div> <a class="downloadLink" href="' +
+zipUrl +
+'" download="' +
+zipName +
+'">Download ZIP</a>';
+
+appendOutputNode(zipNode);
+}
+
+showStatus('Done. Download your modified file(s) below.', 'success');
+
+} else {
+
+showStatus('Unsupported file type. Please upload .html/.htm or .zip.', 'error');
+}
+
+} catch (err) {
+
+console.error(err);
+
+showStatus(
+'Error while processing: ' +
+(err && err.message ? err.message : String(err)),
+'error'
+);
+}
+});
+
+clearBtn.addEventListener('click', function(){
+
+fileInput.value = '';
+
+mappingsTextarea.value = '';
+
+safeRenameCheckbox.checked = false;
+
+statusArea.innerHTML = '';
+
+clearOutputs();
+
+showStatus('Cleared inputs.', 'info');
+});
+
+(function addDropZone(){
+
+const container = document.querySelector('.container');
+
+container.addEventListener('dragover', function(e){
+e.preventDefault();
+container.style.outline='2px dashed rgba(96,165,250,0.12)';
+});
+
+container.addEventListener('dragleave', function(e){
+container.style.outline='';
+});
+
+container.addEventListener('drop', function(e){
+
+e.preventDefault();
+
+container.style.outline='';
+
+const dt = e.dataTransfer;
+
+if (dt && dt.files && dt.files.length) {
+
+const f = dt.files[0];
+
+const dataTransfer = new DataTransfer();
+
+dataTransfer.items.add(f);
+
+fileInput.files = dataTransfer.files;
+
+showStatus('File "' + f.name + '" attached via drag-and-drop.', 'info');
+}
+});
+})();
+
+window.addEventListener('keydown', function(e){
+
+if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+processBtn.click();
+}
+});
+
+})();
+</script>
+</body>
+</html>
